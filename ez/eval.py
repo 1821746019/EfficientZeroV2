@@ -1,191 +1,177 @@
-# Copyright (c) EVAR Lab, IIIS, Tsinghua University.
-#
-# This source code is licensed under the GNU License, Version 3.0
-# found in the LICENSE file in the root directory of this source tree.
-
-import os
-import sys
-sys.path.append(os.getcwd())
-
-import time
-import torch
-import ray
-import copy
-import cv2
-import hydra
-import multiprocessing
+import jax
+import jax.numpy as jnp
 import numpy as np
+import chex
+from typing import Any, Optional
+from flax.training import checkpoints
 import imageio
-from PIL import Image, ImageDraw
+import os
 
-from pathlib import Path
-from tqdm.auto import tqdm
-from omegaconf import OmegaConf
-from torch.cuda.amp import autocast as autocast
-import torch.nn.functional as F
-from ez import mcts
-from ez import agents
-from ez.envs import make_envs
-from ez.utils.format import formalize_obs_lst, DiscreteSupport, prepare_obs_lst, symexp, profile
-from ez.mcts.cy_mcts import Gumbel_MCTS
-from ez.utils.distribution import SquashedNormal, TruncatedNormal
+from . import networks
+from . import environments
+from . import mcts_config as mcts_cfg
+from . import utils
 
-@hydra.main(config_path="./config", config_name='config', version_base='1.1')
-def main(config):
-    if config.exp_config is not None:
-        exp_config = OmegaConf.load(config.exp_config)
-        config = OmegaConf.merge(config, exp_config)
+def run_evaluation(
+    config: Any,
+    model_params_path: str,
+    eval_rng_key: chex.PRNGKey,
+    num_episodes: int,
+    video_save_dir: Optional[str] = None
+):
+    print(f"Starting evaluation for {num_episodes} episodes...")
+    print(f"Loading model from: {model_params_path}")
 
-    # update config
-    agent = agents.names[config.agent_name](config)
-
-    num_gpus = torch.cuda.device_count()
-    num_cpus = multiprocessing.cpu_count()
-    ray.init(num_gpus=num_gpus, num_cpus=num_cpus,
-             object_store_memory= 150 * 1024 * 1024 * 1024 if config.env.image_based else 100 * 1024 * 1024 * 1024)
-
-    # prepare model
-    model = agent.build_model()
-    if os.path.exists(config.eval.model_path):
-        weights = torch.load(config.eval.model_path)
-        model.load_state_dict(weights)
-        print('resume model from: ', config.eval.model_path)
-    if int(torch.__version__[0]) == 2:
-        model = torch.compile(model)
-
-    n_episodes = 1
-    save_path = Path(config.eval.save_path)
-
-    eval(agent, model, n_episodes, save_path, config,
-         max_steps=27000,
-         use_pb=True, verbose=config.eval.verbose)
-
-@torch.no_grad()
-def eval(agent, model, n_episodes, save_path, config, max_steps=None, use_pb=False, verbose=0):
-    model.cuda()
-    model.eval()
-
-    # prepare logs
-    if save_path is not None:
-        video_path = save_path / 'recordings'
-        video_path.mkdir(parents=True, exist_ok=True)
+    # Initialize model
+    model = networks.EfficientZeroNet(config=config)
+    
+    # Create dummy observation and action for model initialization if needed for restore
+    # This depends on how checkpoints are saved/loaded with Flax.
+    # Typically, restore_checkpoint just needs the target pytree structure.
+    # We can get this from an uninitialized TrainState or a dummy one.
+    
+    # Load model parameters
+    # Assuming params are saved directly, not the full TrainState for eval
+    restored_params = checkpoints.restore_checkpoint(model_params_path, target=None)
+    if restored_params is None:
+        raise FileNotFoundError(f"No checkpoint found at {model_params_path}")
+    
+    # If full TrainState was saved, extract params: restored_params = restored_state.params
+    # For this example, assume only params dict is saved.
+    # If batch_stats are needed for eval (e.g. BatchNorm in eval mode), they also need to be loaded.
+    # Let's assume for eval, batch_stats are part of the loaded params if model uses them.
+    # Or, they are loaded separately. For simplicity, we'll assume params are enough for eval mode.
+    # A common practice is to save {'params': params, 'batch_stats': batch_stats}
+    
+    # For BatchNorm in eval, we need batch_stats.
+    # If they are not part of `restored_params`, we might need to init model to get their structure.
+    # Let's assume `restored_params` is a dict like {'params': ..., 'batch_stats': ...}
+    # Or, if only params were saved, then batch_stats might not be used or are fixed.
+    
+    # For simplicity, let's assume the loaded checkpoint contains a dict with 'params'
+    # and potentially 'batch_stats' if the model uses them.
+    # If model.init was used to save, it would be {'params': ..., 'batch_stats': ...}
+    # If only model.params were saved, then batch_stats are not available.
+    
+    # Let's assume the checkpoint is a dict containing 'params' and 'batch_stats'
+    # If not, this part needs adjustment based on how checkpoints are saved.
+    if 'params' not in restored_params: # If the raw params were saved directly
+        eval_params = {'params': restored_params}
     else:
-        video_path = None
+        eval_params = restored_params # Assumes dict {'params': ..., 'batch_stats': ...}
 
-    dones = np.array([False for _ in range(n_episodes)])
-    if use_pb:
-        pb = tqdm(np.arange(max_steps), leave=True)
-    ep_ori_rewards = np.zeros(n_episodes)
+    @jax.jit
+    def select_action_eval(
+        params_with_stats: chex.ArrayTree, 
+        observation_stack: chex.Array, 
+        rng_key: chex.PRNGKey
+    ) -> chex.Array:
+        if config.eval.use_mcts_in_eval:
+            policy_output = mcts_cfg.run_mcts(
+                params=params_with_stats, # Pass params and batch_stats
+                rng_key=rng_key,
+                observation_stack=jnp.expand_dims(observation_stack, axis=0), # Add batch dim
+                model_apply_fn=model.apply, # Pass the model's apply method
+                config=config,
+                num_simulations=config.eval.eval_mcts_simulations,
+                temperature=config.eval.eval_temperature # For Gumbel scale in MCTS
+            )
+            action = policy_output.action[0] # Remove batch dim
+        else: # Greedy from policy head
+            # Ensure model.apply is called with batch_stats if model uses them
+            _, _, policy_logits = model.apply(
+                params_with_stats, # This should include {'params': ..., 'batch_stats': ...}
+                jnp.expand_dims(observation_stack, axis=0),
+                method=networks.EfficientZeroNet.initial_inference,
+                train=False # Evaluation mode
+            )
+            action = jnp.argmax(policy_logits[0], axis=-1)
+        return action
 
-    # make env
-    if max_steps is not None:
-        config.env.max_episode_steps = max_steps
-    envs = make_envs(config.env.env, config.env.game, n_episodes, config.env.base_seed, save_path=video_path,
-                     episodic_life=False, **config.env)
+    episode_rewards = []
+    episode_lengths = []
 
-    # initialization
-    stack_obs_windows, game_trajs = agent.init_envs(envs, max_steps)
+    for i in range(num_episodes):
+        eval_rng_key, env_seed_key = jax.random.split(eval_rng_key)
+        env_seed = int(jax.random.randint(env_seed_key, (), 0, 2**31 -1))
 
-    # set infinity trajectory size
-    [traj.set_inf_len() for traj in game_trajs]
-
-    # begin to evaluate
-    step = 0
-    frames = [[] for _ in range(n_episodes)]
-    rewards = [[] for _ in range(n_episodes)]
-    while not dones.all():
-        # debug
-        if verbose:
-            import ipdb
-            ipdb.set_trace()
-
-        # stack obs
-        current_stacked_obs = formalize_obs_lst(stack_obs_windows, image_based=config.env.image_based)
-        # obtain the statistics at current steps
-        with torch.no_grad():
-            with autocast():
-                states, values, policies = model.initial_inference(current_stacked_obs)
-
-        values = values.detach().cpu().numpy().flatten()
-
-
-        # tree search for policies
-        tree = mcts.names[config.mcts.language](
-            # num_actions=config.env.action_space_size if config.env.env == 'Atari' else config.mcts.num_top_actions,
-            num_actions=config.env.action_space_size if config.env.env == 'Atari' else config.mcts.num_sampled_actions,
-            discount=config.rl.discount,
-            env=config.env.env,
-            **config.mcts,  # pass mcts related params
-            **config.model,  # pass the value and reward support params
+        video_file = None
+        if video_save_dir:
+            os.makedirs(video_save_dir, exist_ok=True)
+            video_file = os.path.join(video_save_dir, f"episode_{i}_seed{env_seed}.mp4")
+            
+        env = environments.create_atari_env(
+            game_name=config.env.game,
+            seed=env_seed,
+            config=config,
+            record_video_path=video_file # Pass video path to wrapper
         )
-        if config.env.env == 'Atari':
-            if config.mcts.use_gumbel:
-                r_values, r_policies, best_actions, _ = tree.search(model, n_episodes, states, values, policies,
-                                                                    use_gumble_noise=False, verbose=verbose)
-            else:
-                r_values, r_policies, best_actions, _ = tree.search_ori_mcts(model, n_episodes, states, values, policies,
-                                                                                use_noise=False)
-        else:
-            r_values, r_policies, best_actions, _, _, _ = tree.search_continuous(
-                    model, n_episodes, states, values, policies,
-                    use_gumble_noise=False, verbose=verbose, add_noise=False
-                )
+        
+        current_episode_reward = 0.0
+        current_episode_length = 0
+        
+        obs, _ = env.reset() # obs is already stacked by FrameStack wrapper
+        
+        terminated = truncated = False
+        
+        frames_for_video = []
 
-        # step action in environments
-        for i in range(n_episodes):
-            if dones[i]:
-                continue
-
-            action = best_actions[i]
-            obs, reward, done, info = envs[i].step(action)
-            frames[i].append(obs if config.env.image_based else envs[i].render(mode='rgb_array'))
-            # rewards[i].append(reward)
-            rewards[i].append(info['raw_reward'])
-            dones[i] = done
-
-            # save data to trajectory buffer
-            game_trajs[i].store_search_results(values[i], r_values[i], r_policies[i])
-            game_trajs[i].append(action, obs, reward)
-            if config.env.env == 'Atari':
-                game_trajs[i].snapshot_lst.append(envs[i].ale.cloneState())
-            else:
-                game_trajs[i].snapshot_lst.append(envs[i].physics.get_state())
-
-            del stack_obs_windows[i][0]
-            stack_obs_windows[i].append(obs)
-
-            # log
-            ep_ori_rewards[i] += info['raw_reward']
-
-        step += 1
-        if use_pb:
-            pb.set_description('{} In step {}, take action {}, scores: {}(max: {}, min: {}) currently.'
-                               ''.format(config.env.game, step, best_actions,
-                                         ep_ori_rewards.mean(), ep_ori_rewards.max(), ep_ori_rewards.min()))
-            pb.update(1)
-
-    [env.close() for env in envs]
-    for i in range(n_episodes):
-        writer = imageio.get_writer(video_path / f'epi_{i}_{max_steps}.mp4')
-        rewards[i][0] = sum(rewards[i])
-
-        j = 0
-        for frame, reward in zip(frames[i], rewards[i]):
-            frame = Image.fromarray(frame)
-            draw = ImageDraw.Draw(frame)
-            if config.env.game == 'hopper_hop':
-                draw.text((5, 5), f'mu={game_trajs[i].action_lst[j][0]:.2f},{game_trajs[i].action_lst[j][1]:.2f}')
-                draw.text((5, 20), f'{game_trajs[i].action_lst[j][2]:.2f},{game_trajs[i].action_lst[j][3]:.2f}')
-                draw.text((5, 35), f'r={reward:.2f}')
-
-            frame = np.array(frame)
-            writer.append_data(frame)
-            j += 1
-        writer.close()
-
-    return ep_ori_rewards
+        while not (terminated or truncated):
+            if video_file:
+                # Gymnasium's RecordVideo wrapper handles rendering.
+                # If manual rendering is needed:
+                # frame = env.render() # mode="rgb_array"
+                # frames_for_video.append(frame)
+                pass
 
 
+            eval_rng_key, action_rng_key = jax.random.split(eval_rng_key)
+            
+            # Normalize observation if necessary (e.g. uint8 to float32 / 255.0)
+            # Assuming FrameStack gives [H, W, C*N_stack] uint8
+            obs_processed = jnp.array(obs, dtype=jnp.float32) / 255.0
+            
+            action = select_action_eval(eval_params, obs_processed, action_rng_key)
+            action_np = np.array(action) # Convert to NumPy for Gym environment
 
-if __name__=='__main__':
-    main()
+            obs, reward, terminated, truncated, _ = env.step(action_np)
+            
+            current_episode_reward += reward
+            current_episode_length += 1
+        
+        episode_rewards.append(current_episode_reward)
+        episode_lengths.append(current_episode_length)
+        print(f"Episode {i+1}/{num_episodes}: Reward={current_episode_reward}, Length={current_episode_length}")
+
+        env.close() # Closes video recorder if active
+
+    mean_reward = np.mean(episode_rewards)
+    std_reward = np.std(episode_rewards)
+    mean_length = np.mean(episode_lengths)
+    
+    print("\n--- Evaluation Summary ---")
+    print(f"Average Reward: {mean_reward:.2f} +/- {std_reward:.2f}")
+    print(f"Average Length: {mean_length:.2f}")
+    print("------------------------\n")
+
+    return {"eval/mean_reward": mean_reward, "eval/std_reward": std_reward, "eval/mean_length": mean_length}
+
+# Example usage (called from main.py or standalone)
+if __name__ == '__main__':
+    # This part would require Hydra to load config, or manual config setup
+    # For a quick test, you might mock a config object
+    # And ensure a checkpoint exists at the specified path
+    print("Eval script can be run standalone with proper config and checkpoint.")
+    # Example:
+    # import hydra
+    # from omegaconf import DictConfig
+    #
+    # @hydra.main(config_path="configs", config_name="config", version_base=None)
+    # def main_eval(cfg: DictConfig):
+    #     rng_key = jax.random.PRNGKey(cfg.seed)
+    #     # Specify checkpoint path, e.g., from cfg or hardcoded for test
+    #     checkpoint_to_eval = "path/to/your/checkpoint_dir/checkpoint_XXX" 
+    #     video_dir = os.path.join(cfg.save_dir, "eval_videos")
+    #     run_evaluation(cfg, checkpoint_to_eval, rng_key, cfg.eval.num_episodes, video_dir)
+    #
+    # main_eval()

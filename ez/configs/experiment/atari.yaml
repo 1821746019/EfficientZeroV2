@@ -1,0 +1,135 @@
+# Defaults for EfficientZero on Atari with JAX and MCTX
+
+defaults:
+  - override /hydra/job_logging: simple
+  - override /hydra/hydra_logging: simple
+
+# Agent Name (for potential future use if multiple agents are defined)
+agent_name: atari_efficientzero_jax
+
+# Environment Configuration
+env:
+  game: "Pong" # Example: "PongNoFrameskip-v4" (Gymnasium format)
+  # For Gymnasium, rom license needs to be accepted: gymnasium[atari,accept-rom-license]
+  # For specific game versions, ensure they are available.
+  # We'll add "NoFrameskip-v4" internally if not present.
+  frame_skip: 4
+  frame_stack: 4
+  screen_size: 96 # Height and Width
+  grayscale: True
+  clip_rewards: True # Clip to {-1, 0, 1}
+  terminal_on_life_loss: True
+  max_episode_steps: 27000 # Max steps per episode in underlying env before wrapper truncation
+
+# Optimizer Configuration (Optax)
+optimizer:
+  name: "adamw" # Optax optimizer name
+  learning_rate: 0.0002 # Initial learning rate
+  b1: 0.9
+  b2: 0.95
+  weight_decay: 0.0001
+  # Learning rate schedule (example: warmup cosine decay)
+  lr_schedule:
+    name: "warmup_cosine_decay"
+    warmup_steps: 5000
+    peak_value: 0.0002 # Corresponds to learning_rate above
+    end_value: 0.00001 # Minimum learning rate
+
+# Training Configuration
+train:
+  batch_size_per_device: 32 # Batch size for each TPU core
+  # Global batch size will be batch_size_per_device * num_devices
+  num_unroll_steps: 5
+  td_steps: 5 # For n-step returns calculation for value target
+  discount: 0.997 # Discount factor for future rewards in MCTS and learning
+  
+  start_train_after_steps: 20000 # Steps in replay buffer before training starts
+  
+  target_network_update_period: 200 # Steps between updating target network
+  self_play_model_update_period: 100 # Steps between updating model for self-play actors
+
+  # Loss Coefficients
+  value_loss_coeff: 0.25 # Original was 0.25 or 0.5
+  policy_loss_coeff: 1.0
+  reward_loss_coeff: 1.0
+  consistency_loss_coeff: 2.0 # If using SPR-like consistency
+
+  max_grad_norm: 5.0 # Gradient clipping
+
+  # Value and Reward representation
+  use_categorical_value: True
+  value_support_min: -300.0
+  value_support_max: 300.0
+  value_support_bins: 601 # (max - min) / scale + 1, if scale=1
+  
+  use_categorical_reward: True
+  reward_support_min: -300.0 # Atari rewards are typically small, but keep consistent with value
+  reward_support_max: 300.0
+  reward_support_bins: 601
+
+# Replay Buffer Configuration
+replay_buffer:
+  capacity: 1000000
+  priority_alpha: 0.6 # PER alpha
+  priority_beta_initial: 0.4 # PER beta initial
+  priority_beta_final: 1.0 # PER beta final
+  priority_beta_steps: 500000 # Steps to anneal beta
+  priority_epsilon: 0.00001 # Small constant for priorities
+
+# MCTS Configuration (for MCTX)
+mcts:
+  num_simulations: 50 # Number of MCTS simulations per step
+  temperature_initial: 1.0 # For self-play action selection
+  temperature_final: 0.25
+  temperature_decay_steps: 250000
+  # Gumbel MuZero specific (using mctx.gumbel_muzero_policy)
+  gumbel_scale: 1.0
+  max_num_considered_actions: 16 # K in Gumbel-MuZero paper
+  # Q-transform for Gumbel MuZero (mctx.qtransform_completed_by_mix_value)
+  q_transform:
+    value_scale: 0.1
+    maxvisit_init: 50.0
+    rescale_values: True # Normalize Q to [0,1] before scaling
+    use_mixed_value: True
+  
+  # MCTS discount is same as train.discount
+
+# Model Architecture Configuration
+model:
+  # Representation Network (CNN for Atari)
+  repr_cnn_channels: [32, 64, 64] # Channels for conv layers
+  repr_cnn_kernels: [8, 4, 3]
+  repr_cnn_strides: [4, 2, 1]
+  embedding_dim: 256 # Output dim of representation net, input to dynamics/prediction
+
+  # Dynamics Network
+  dynamics_mlp_layers: [256, 256] # Hidden layers for state transition and reward prediction
+  # Action embedding for discrete actions (optional, can be one-hot encoded)
+  use_action_embedding: True
+  action_embedding_dim: 128
+
+  # Prediction Network (Value and Policy heads)
+  prediction_mlp_layers: [256, 256] # Hidden layers for value and policy heads
+
+  # Consistency Projection (if used, SPR-like)
+  use_consistency_projection: True
+  projection_hidden_dim: 512
+  projection_output_dim: 1024 # z in SPR
+  predictor_hidden_dim: 512 # Predictor for z' from z
+
+  # LSTM for value_prefix (if rewards are summed over time in dynamics)
+  use_reward_lstm: True # If True, dynamics net needs an LSTM for reward accumulation
+  reward_lstm_hidden_size: 256
+
+# Actors Configuration (Self-play)
+actors:
+  num_envs_per_device: 4 # Number of parallel environments on each TPU core for self-play
+  # Total self-play environments = num_envs_per_device * num_devices
+
+# Evaluation
+eval:
+  num_episodes: 10
+  # MCTS for evaluation (optional, can also use greedy policy)
+  use_mcts_in_eval: True
+  eval_mcts_simulations: 50
+  eval_temperature: 0.0 # For deterministic action selection in eval

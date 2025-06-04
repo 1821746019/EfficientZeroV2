@@ -1,0 +1,42 @@
+# Main Hydra Configuration
+
+# Paths & Logging
+save_dir: "outputs/${hydra.job.name}" # Hydra will manage output directories
+wandb:
+  project: "efficientzero_jax"
+  entity: null # Your wandb entity (username or team)
+  mode: "online" # "online", "offline", or "disabled"
+  tags: ["atari", "efficientzero_v2_jax"]
+  name: "${env.game}-${hydra.job.override_dirname}"
+
+# General Settings
+seed: 0
+total_training_steps: 1000000 # Example total steps
+log_interval_steps: 1000
+checkpoint_interval_steps: 50000
+eval_interval_steps: 25000
+
+# Default placeholders for experiment-specific configs
+env: {}
+optimizer: {}
+train: {}
+replay_buffer: {}
+mcts: {}
+model: {}
+actors: {} # For self-play configuration (e.g., num_envs_per_device)
+
+# Hydra settings
+hydra:
+  run:
+    dir: ${save_dir}
+  sweep:
+    dir: multirun/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job_logging:
+    formatters:
+      simple:
+        format: '[%(asctime)s][%(name)s][%(levelname)s] - %(message)s'
+  hydra_logging:
+    formatters:
+      simple:
+        format: '[%(asctime)s][%(name)s][%(levelname)s] - %(message)s'

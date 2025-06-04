@@ -129,14 +129,41 @@ We thank all these authors for their nicely open sourced code and their great co
 
 Contact [Shengjie Wang](https://shengjiewang-jason.github.io/), [Shaohuai Liu](https://liushaohuai5.github.io/) and [Weirui Ye](https://yewr.github.io/) if you have any questions or suggestions.
 
-## 📝 Citation
 
-If you find our work useful, please consider citing:
 ```
-@article{wang2024efficientzero,
-  title={EfficientZero V2: Mastering Discrete and Continuous Control with Limited Data},
-  author={Wang, Shengjie and Liu, Shaohuai and Ye, Weirui and You, Jiacheng and Gao, Yang},
-  journal={arXiv preprint arXiv:2403.00564},
-  year={2024}
-}
-```
+
+# ==============================================================================
+# 使用说明
+# ==============================================================================
+"""
+使用方法:
+
+1. 安装依赖:
+   pip install jax==0.4.6 flax optax mctx dm-env dm_control gymnasium numpy opencv-python tqdm
+
+2. 训练Atari游戏:
+   python ez_jax/main.py --env atari --steps 100000
+
+3. 训练DMC任务:
+   python ez_jax/main.py --env dmc --steps 50000
+
+4. 仅评估模型:
+   python ez_jax/main.py --env atari --eval-only --load final_model.pkl
+
+5. 从检查点恢复训练:
+   python ez_jax/main.py --env atari --steps 200000 --load model_step_50000.pkl
+
+主要改进:
+- 完全移除PyTorch和Ray依赖
+- 使用JAX+Flax实现模型
+- 使用mctx库替代Cython MCTS
+- 使用jax.pmap实现多TPU并行
+- 简化数据流程，使用线程替代分布式工作进程
+- 保持原始算法逻辑不变
+
+注意事项:
+- 代码针对TPU v4-8优化，自动使用所有4个TPU核心
+- 使用装饰器简化多设备并行化
+- 内存使用经过优化，适合TPU环境
+- 支持检查点保存和恢复
+"""
