@@ -4,7 +4,7 @@ agent_name: state_agent
 # env setting
 env:
   env: Gym
-  game: Acrobot-v1
+  game: LunarLanderContinuous-v2
   base_seed: 0
   n_skip: 2
   n_stack: 1
@@ -12,7 +12,7 @@ env:
   gray_scale: False
   image_based: False
   clip_reward: False
-  obs_shape: [10]
+  obs_shape: [8]
 
 # model architecture
 model:

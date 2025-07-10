@@ -153,8 +153,8 @@ model:
 
 # worker process allocation
 actors:
-  data_worker: 2
-  batch_worker: 8
+  data_worker: 30
+  batch_worker: 150
 
 # wandb
 wandb:
