@@ -15,3 +15,6 @@ __pycache__/
 /results
 /files
 /test*
+ez/mcts/**/*.cpp
+**/wandb/
+**/*.egg-info/

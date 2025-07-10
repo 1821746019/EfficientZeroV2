@@ -1,6 +1,16 @@
 import os
 import dmc2gym
-from gym.wrappers import Monitor
+import gym
+
+try:
+    from gym.wrappers import Monitor  # Gym <= 0.25 版本
+except ImportError:  # Gym >= 0.26 已移除 Monitor
+    from gym.wrappers.record_video import RecordVideo
+
+    def Monitor(env, directory, *args, **kwargs):
+        """A thin wrapper around RecordVideo to mimic the old Monitor API."""
+        # Record every episode by default to keep previous behaviour.
+        return RecordVideo(env, video_folder=directory, episode_trigger=lambda x: True)  # 录制每个 episode
 from .gym import GymWrapper
 from .atari import AtariWrapper
 from .dmc import DMCWrapper
