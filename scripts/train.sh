@@ -10,7 +10,10 @@ export NCCL_IGNORE_DISABLED_P2P=1
 export HYDRA_FULL_ERROR=1
 export MASTER_PORT='12399'
 export MUJOCO_GL=egl
-
-# python ez/train.py exp_config=ez/config/exp/atari.yaml #> profile.txt
-python ez/train.py exp_config=ez/config/exp/dmc_image.yaml #> profile.txt
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1        # 如果装了 MKL
+python ez/train.py exp_config=ez/config/exp/atari.yaml #> profile.txt
+# python ez/train.py exp_config=ez/config/exp/dmc_image.yaml #> profile.txt
 # python ez/train.py exp_config=ez/config/exp/dmc_state.yaml #> profile.txt
+# gym的没完全适配
+# python ez/train.py exp_config=ez/config/exp/state.yaml #> profile.txt 
