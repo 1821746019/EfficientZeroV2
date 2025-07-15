@@ -20,7 +20,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from pathlib import Path
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from ez import agents
 from ez.utils.format import set_seed, init_logger
@@ -33,6 +33,9 @@ def main(config):
     if config.exp_config is not None:
         exp_config = OmegaConf.load(config.exp_config)
         config = OmegaConf.merge(config, exp_config)
+
+    with open_dict(config):
+        config.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     if config.ray.single_process:
         config.train.self_play_update_interval = 1
@@ -52,7 +55,7 @@ def start_ddp_trainer(rank, config):
     print(f'start {rank} train worker...')
     agent = agents.names[config.agent_name](config)         # update config
     manager = None
-    num_gpus = torch.cuda.device_count()
+    num_gpus = torch.cuda.device_count() if config.device == 'cuda' else 0
     num_cpus = multiprocessing.cpu_count()
     ray.init(num_gpus=num_gpus, num_cpus=num_cpus, object_store_memory=150 * 1024 * 1024 * 1024 if config.env.image_based else 100 * 1024 * 1024 * 1024)
     set_seed(config.env.base_seed + rank >= 0)              # set seed

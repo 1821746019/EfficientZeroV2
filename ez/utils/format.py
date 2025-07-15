@@ -255,12 +255,12 @@ def formalize_obs_lst(obs_lst, image_based, already_prepare=False):
     # obs_lst = prepare_obs_lst(obs_lst, image_based)
     obs_lst = np.asarray(obs_lst)
     if image_based:
-        obs_lst = torch.from_numpy(obs_lst).cuda().float() / 255.
+        obs_lst = torch.from_numpy(obs_lst).float() / 255.
         obs_lst = torch.moveaxis(obs_lst, -1, 2)
         shape = obs_lst.shape
         obs_lst = obs_lst.reshape((shape[0], -1, shape[-2], shape[-1]))
     else:
-        obs_lst = torch.from_numpy(obs_lst).cuda().float()
+        obs_lst = torch.from_numpy(obs_lst).float()
         shape = obs_lst.shape
         obs_lst = obs_lst.reshape((shape[0], -1))
     return obs_lst
@@ -317,7 +317,8 @@ def pad_and_mask(trajectories, pad_value=0, is_action=False):
     max_len = max([len(t) for t in trajectories])
 
     # Initialize masks with zeros
-    masks = torch.ones(len(trajectories), max_len).cuda().bool()
+    device = trajectories[0].device if len(trajectories) > 0 and isinstance(trajectories[0], torch.Tensor) else 'cpu'
+    masks = torch.ones(len(trajectories), max_len, device=device).bool()
 
     # Pad trajectories and create masks
     padded_trajectories = []
@@ -359,6 +360,10 @@ def get_ddp_model_weights(ddp_model):
 def allocate_gpu(rank, gpu_lst, worker_name):
     # set the gpu it resides on according to remaining memory
     time.sleep(3)
+    if not torch.cuda.is_available():
+        print(f"[{worker_name} worker] {worker_name} worker {rank} at process {os.getpid()} will use CPU.")
+        return
+
     available_memory_list = get_gpu_memory()
     for i in range(len(available_memory_list)):
         if i not in gpu_lst:
@@ -395,7 +400,8 @@ def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
 
@@ -431,8 +437,9 @@ if __name__=='__main__':
     #     'env': 'Atari',
     #     # 'bins': 51
     # }
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     value = np.ones((2, 1)) * 15
-    value = torch.from_numpy(value).float().cuda()
+    value = torch.from_numpy(value).float().to(device)
     print(f'input={value}')
     vec = support.scalar_to_vector(value, **dict).squeeze()
     vec2 = support.scalar_to_vector2(value, **dict).squeeze()

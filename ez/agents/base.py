@@ -73,8 +73,8 @@ class Agent:
             train_logger.info('save model in: {}'.format(model_path))
 
         # prepare model
-        model = self.build_model().cuda()
-        target_model = self.build_model().cuda()
+        model = self.build_model().to(self.config.device)
+        target_model = self.build_model().to(self.config.device)
         # load model
         load_path = self.config.train.load_model_path
         if os.path.exists(load_path):
@@ -89,7 +89,10 @@ class Agent:
 
         # DDP
         if self.use_ddp:
-            model = DDP(model, device_ids=[rank])
+            if self.config.device == 'cuda':
+                model = DDP(model, device_ids=[rank])
+            else:
+                model = DDP(model)
 
         if int(torch.__version__[0]) == 2:
             model = torch.compile(model)
@@ -123,7 +126,7 @@ class Agent:
         else:
             scheduler = None
 
-        scaler = GradScaler()
+        scaler = GradScaler(enabled=(self.config.device == 'cuda'))
 
         # wait until collecting enough data to start
         while not (ray.get(replay_buffer.get_transition_num.remote()) >= self.config.train.start_transitions):
@@ -182,7 +185,7 @@ class Agent:
             if is_main_process and step_count % self.config.train.reanalyze_update_interval == 0:
                 storage.set_weights.remote(recent_weights, 'reanalyze')
                 target_model.set_weights(recent_weights)
-                target_model.cuda()
+                target_model.to(self.config.device)
                 target_model.eval()
                 recent_weights = self.get_weights(model)
 
@@ -359,9 +362,9 @@ class Agent:
 
         # obs_batch_raw: [s_{t - stack} ... s_{t} ... s_{t + unroll}]
         if self.config.env.image_based:
-            obs_batch_raw = torch.from_numpy(obs_batch_ori).cuda().float() / 255.
+            obs_batch_raw = torch.from_numpy(obs_batch_ori).to(self.config.device).float() / 255.
         else:
-            obs_batch_raw = torch.from_numpy(obs_batch_ori).cuda().float()
+            obs_batch_raw = torch.from_numpy(obs_batch_ori).to(self.config.device).float()
 
         obs_batch = obs_batch_raw[:, 0: n_stack * image_channel]  # obs_batch: current observation
         obs_target_batch = obs_batch_raw[:, image_channel:]       # obs_target_batch: observation of next steps
@@ -379,23 +382,23 @@ class Agent:
 
         # others to gpu
         if self.config.env.env in ['DMC', 'Gym']:
-            action_batch = torch.from_numpy(action_batch).float().cuda()
+            action_batch = torch.from_numpy(action_batch).float().to(self.config.device)
         else:
-            action_batch = torch.from_numpy(action_batch).cuda().unsqueeze(-1).long()
-        mask_batch = torch.from_numpy(mask_batch).cuda().float()
-        weights = torch.from_numpy(weights_lst).cuda().float()
+            action_batch = torch.from_numpy(action_batch).to(self.config.device).unsqueeze(-1).long()
+        mask_batch = torch.from_numpy(mask_batch).to(self.config.device).float()
+        weights = torch.from_numpy(weights_lst).to(self.config.device).float()
 
         max_value_target = np.array([target_values, search_values]).max(0)
 
-        target_value_prefixes = torch.from_numpy(target_value_prefixes).cuda().float()
-        target_values = torch.from_numpy(target_values).cuda().float()
-        target_actions = torch.from_numpy(target_actions).cuda().float()
-        target_policies = torch.from_numpy(target_policies).cuda().float()
-        target_best_actions = torch.from_numpy(target_best_actions).cuda().float()
-        top_value_masks = torch.from_numpy(top_value_masks).cuda().float()
-        mismatch_masks = torch.from_numpy(mismatch_masks).cuda().float()
-        search_values = torch.from_numpy(search_values).cuda().float()
-        max_value_target = torch.from_numpy(max_value_target).cuda().float()
+        target_value_prefixes = torch.from_numpy(target_value_prefixes).to(self.config.device).float()
+        target_values = torch.from_numpy(target_values).to(self.config.device).float()
+        target_actions = torch.from_numpy(target_actions).to(self.config.device).float()
+        target_policies = torch.from_numpy(target_policies).to(self.config.device).float()
+        target_best_actions = torch.from_numpy(target_best_actions).to(self.config.device).float()
+        top_value_masks = torch.from_numpy(top_value_masks).to(self.config.device).float()
+        mismatch_masks = torch.from_numpy(mismatch_masks).to(self.config.device).float()
+        search_values = torch.from_numpy(search_values).to(self.config.device).float()
+        max_value_target = torch.from_numpy(max_value_target).to(self.config.device).float()
 
         # transform value and reward to support
         target_value_prefixes_support = DiscreteSupport.scalar_to_vector(target_value_prefixes, **self.config.model.reward_support)
@@ -432,7 +435,7 @@ class Agent:
         fresh_priority += self.config.priority.min_prior
         replay_buffer.update_priorities.remote(indices, fresh_priority, make_time)
 
-        value_loss = torch.zeros(batch_size).cuda()
+        value_loss = torch.zeros(batch_size).to(self.config.device)
         value_loss += Value_loss(values, this_target_values[:, 0], self.config)
         prev_values = values.clone()
 
@@ -451,11 +454,11 @@ class Agent:
  
         else:
             policy_loss = kl_loss(policies, target_policies[:, 0])
-            entropy_loss = torch.zeros(batch_size).cuda()
+            entropy_loss = torch.zeros(batch_size).to(self.config.device)
 
-        value_prefix_loss = torch.zeros(batch_size).cuda()
-        consistency_loss = torch.zeros(batch_size).cuda()
-        policy_entropy_loss = torch.zeros(batch_size).cuda()
+        value_prefix_loss = torch.zeros(batch_size).to(self.config.device)
+        consistency_loss = torch.zeros(batch_size).to(self.config.device)
+        policy_entropy_loss = torch.zeros(batch_size).to(self.config.device)
         policy_entropy_loss -= entropy_loss
 
         prev_value_prefixes = torch.zeros_like(policy_loss)
@@ -525,11 +528,16 @@ class Agent:
         with autocast():
             weighted_loss.register_hook(lambda grad: grad * gradient_scale)
         optimizer.zero_grad()
-        scaler.scale(weighted_loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(parameters, self.config.train.max_grad_norm)
-        scaler.step(optimizer)
-        scaler.update()
+        if scaler:
+            scaler.scale(weighted_loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(parameters, self.config.train.max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            weighted_loss.backward()
+            torch.nn.utils.clip_grad_norm_(parameters, self.config.train.max_grad_norm)
+            optimizer.step()
 
         if self.config.model.noisy_net:
             model.value_policy_model.reset_noise()
@@ -650,8 +658,8 @@ class Agent:
 
     def init_reward_hidden(self, batch_size):
         if self.config.model.value_prefix:
-            reward_hidden = (torch.zeros(1, batch_size, self.config.model.lstm_hidden_size).cuda(),
-                             torch.zeros(1, batch_size, self.config.model.lstm_hidden_size).cuda())
+            reward_hidden = (torch.zeros(1, batch_size, self.config.model.lstm_hidden_size).to(self.config.device),
+                             torch.zeros(1, batch_size, self.config.model.lstm_hidden_size).to(self.config.device))
         else:
             reward_hidden = None
         return reward_hidden
@@ -699,8 +707,15 @@ def train_ddp(agent, rank, replay_buffer, storage, batch_storage, logger):
         train_logger.info('save model in: {}'.format(model_path))
 
     # prepare model
-    model = agent.build_model().cuda()
-    target_model = agent.build_model().cuda()
+    model = agent.build_model()
+    target_model = agent.build_model()
+    if agent.config.device == 'cuda':
+        model.to(rank)
+        target_model.to(rank)
+    else:
+        model.to('cpu')
+        target_model.to('cpu')
+
     # load model
     load_path = agent.config.train.load_model_path
     if os.path.exists(load_path):
@@ -716,7 +731,10 @@ def train_ddp(agent, rank, replay_buffer, storage, batch_storage, logger):
     # DDP
     if agent.use_ddp:
         DDP_setup(rank=rank, world_size=agent.config.ddp.world_size, training_size=agent.config.ddp.training_size, address='127.0.0.1')
-        model = DDP(model, device_ids=[rank])
+        if agent.config.device == 'cuda':
+            model = DDP(model, device_ids=[rank])
+        else:
+            model = DDP(model)
 
     if int(torch.__version__[0]) == 2:
         model = torch.compile(model)
@@ -750,7 +768,7 @@ def train_ddp(agent, rank, replay_buffer, storage, batch_storage, logger):
     else:
         scheduler = None
 
-    scaler = GradScaler()
+    scaler = GradScaler(enabled=(agent.config.device == 'cuda'))
 
     # wait until collecting enough data to start
     while not (ray.get(replay_buffer.get_transition_num.remote()) >= agent.config.train.start_transitions):
@@ -806,7 +824,10 @@ def train_ddp(agent, rank, replay_buffer, storage, batch_storage, logger):
         if is_main_process and step_count % agent.config.train.reanalyze_update_interval == 0:
             storage.set_weights.remote(recent_weights, 'reanalyze')
             target_model.set_weights(recent_weights)
-            target_model.cuda()
+            if agent.config.device == 'cuda':
+                target_model.to(rank)
+            else:
+                target_model.to('cpu')
             target_model.eval()
             recent_weights = agent.get_weights(model)
 

@@ -55,7 +55,7 @@ class CyMCTS(MCTS):
                 random_distr = Dist(mean, std_magnification * std)  # more flatten gaussian policy
                 random_actions = random_distr.sample(torch.Size([n_random]))
             else:
-                noises = torch.from_numpy(input_noises).float().cuda()
+                noises = torch.from_numpy(input_noises).float().to(policy.device)
                 random_actions += noises
 
         if input_dist is not None:
@@ -71,12 +71,12 @@ class CyMCTS(MCTS):
                     refined_random_distr = Dist(refined_mean, std_magnification * refined_std)
                     refined_random_actions = refined_random_distr.sample(torch.Size([n_random]))
                 else:
-                    noises = torch.from_numpy(input_noises).float().cuda()
+                    noises = torch.from_numpy(input_noises).float().to(policy.device)
                     refined_random_actions += noises
 
         all_actions = torch.cat((policy_actions, random_actions), dim=0)
         if input_actions is not None:
-            all_actions = torch.from_numpy(input_actions).float().cuda()
+            all_actions = torch.from_numpy(input_actions).float().to(policy.device)
         if input_dist is not None:
             all_actions = torch.cat((all_actions, refined_policy_actions, refined_random_actions), dim=0)
         all_actions = all_actions.clip(-0.999, 0.999)
@@ -123,7 +123,6 @@ class CyMCTS(MCTS):
         # preparation
         # Node.set_static_attributes(self.discount, self.num_actions)  # set static parameters of MCTS
         # set root nodes for the batch
-        # root_sampled_actions, policy_priors = self.sample_actions(root_policy_logits, std_mag=3 if add_noise else 1)
         root_sampled_actions, policy_priors = self.sample_actions(root_policy_logits, add_noise, temperature, input_noises, input_dist=input_dist, input_actions=input_actions)
 
         sampled_action_num = root_sampled_actions.shape[1]
@@ -150,8 +149,9 @@ class CyMCTS(MCTS):
         value_min_max_lst = tree.MinMaxStatsList(batch_size)
         value_min_max_lst.set_static_val(self.value_minmax_delta, self.c_visit, self.c_scale)
 
-        reward_hidden = (torch.zeros(1, batch_size, self.lstm_hidden_size).cuda().float(),
-                         torch.zeros(1, batch_size, self.lstm_hidden_size).cuda().float())
+        device = root_states.device
+        reward_hidden = (torch.zeros(1, batch_size, self.lstm_hidden_size, device=device).float(),
+                         torch.zeros(1, batch_size, self.lstm_hidden_size, device=device).float())
 
         # index of states
         state_pool = [root_states]
@@ -315,9 +315,10 @@ class CyMCTS(MCTS):
         value_min_max_lst = ori_tree.MinMaxStatsList(batch_size)
         value_min_max_lst.set_delta(self.value_minmax_delta)
 
+        device = root_states.device
         if self.value_prefix:
-            reward_hidden = (torch.zeros(1, batch_size, self.lstm_hidden_size).cuda().float(),
-                             torch.zeros(1, batch_size, self.lstm_hidden_size).cuda().float())
+            reward_hidden = (torch.zeros(1, batch_size, self.lstm_hidden_size, device=device).float(),
+                             torch.zeros(1, batch_size, self.lstm_hidden_size, device=device).float())
         else:
             reward_hidden = None
 
@@ -362,7 +363,7 @@ class CyMCTS(MCTS):
             current_states = torch.stack(current_states)
             hidden_states_c_reward = torch.stack(hidden_states_c_reward).unsqueeze(0)
             hidden_states_h_reward = torch.stack(hidden_states_h_reward).unsqueeze(0)
-            last_actions = torch.from_numpy(np.asarray(last_actions)).cuda().long().unsqueeze(1)
+            last_actions = torch.from_numpy(np.asarray(last_actions)).to(current_states.device).long().unsqueeze(1)
 
             # inference state, reward, value, policy given the current state
             reward_hidden = (hidden_states_c_reward, hidden_states_h_reward)
@@ -425,9 +426,10 @@ class CyMCTS(MCTS):
         value_min_max_lst = tree.MinMaxStatsList(batch_size)
         value_min_max_lst.set_static_val(self.value_minmax_delta, self.c_visit, self.c_scale)
 
+        device = root_states.device
         if self.value_prefix:
-            reward_hidden = (torch.zeros(1, batch_size, self.lstm_hidden_size).cuda().float(),
-                             torch.zeros(1, batch_size, self.lstm_hidden_size).cuda().float())
+            reward_hidden = (torch.zeros(1, batch_size, self.lstm_hidden_size, device=device).float(),
+                             torch.zeros(1, batch_size, self.lstm_hidden_size, device=device).float())
         else:
             reward_hidden = None
 
@@ -484,7 +486,7 @@ class CyMCTS(MCTS):
             current_states = torch.stack(current_states)
             hidden_states_c_reward = torch.stack(hidden_states_c_reward).unsqueeze(0)
             hidden_states_h_reward = torch.stack(hidden_states_h_reward).unsqueeze(0)
-            last_actions = torch.from_numpy(np.asarray(last_actions)).cuda().long().unsqueeze(1)
+            last_actions = torch.from_numpy(np.asarray(last_actions)).to(current_states.device).long().unsqueeze(1)
 
             # inference state, reward, value, policy given the current state
             reward_hidden = (hidden_states_c_reward, hidden_states_h_reward)
@@ -666,7 +668,7 @@ class Gumbel_MCTS(object):
                 # Gaussian noise
                 # random_actions += torch.randn_like(random_actions)
             else:
-                noises = torch.from_numpy(input_noises).float().cuda()
+                noises = torch.from_numpy(input_noises).float().to(policy.device)
                 random_actions += noises
 
         if input_dist is not None:
@@ -684,12 +686,12 @@ class Gumbel_MCTS(object):
                     refined_random_actions = refined_random_distr.sample(torch.Size([n_random]))
                     refined_random_actions = refined_random_actions.permute(1, 0, 2)
                 else:
-                    noises = torch.from_numpy(input_noises).float().cuda()
+                    noises = torch.from_numpy(input_noises).float().to(policy.device)
                     refined_random_actions += noises
 
         all_actions = torch.cat((policy_actions, random_actions), dim=1)
         if input_actions is not None:
-            all_actions = torch.from_numpy(input_actions).float().cuda()
+            all_actions = torch.from_numpy(input_actions).float().to(policy.device)
         if input_dist is not None:
             all_actions = torch.cat((all_actions, refined_policy_actions, refined_random_actions), dim=1)
         # all_actions[:, 0, :] = mean     # add mean as one of candidate
@@ -721,9 +723,10 @@ class Gumbel_MCTS(object):
             root_values.tolist()
         )
 
+        device = hidden_state_roots.device
         reward_hidden_roots = (
-            torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().cuda(),
-            torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().cuda()
+            torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().to(device),
+            torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().to(device)
         )
 
         gumbels = np.random.gumbel(
@@ -773,7 +776,7 @@ class Gumbel_MCTS(object):
 
             last_actions = torch.from_numpy(
                 np.asarray(last_actions)
-            ).to('cuda').unsqueeze(1).long()
+            ).to(hidden_states.device).unsqueeze(1).long()
 
             hidden_state_nodes, reward_sum_pool, value_pool, policy_logits_pool, reward_hidden_nodes = \
                 self.update_statistics(
@@ -849,11 +852,12 @@ class Gumbel_MCTS(object):
         with torch.no_grad():
             model.eval()
 
+            device = hidden_state_roots.device
             reward_sum_pool = [0. for _ in range(batch_size)]
             action_pool = []
             reward_hidden_roots = (
-                torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().cuda(),
-                torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().cuda()
+                torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().to(device),
+                torch.from_numpy(np.zeros((1, batch_size, self.lstm_hidden_size))).float().to(device)
             )
             root_sampled_actions = self.sample_actions(root_policy_logits, add_noise, temperature, input_noises, input_actions=input_actions)
             sampled_action_num = root_sampled_actions.shape[1]

@@ -21,7 +21,7 @@ from ez.utils.format import formalize_obs_lst, DiscreteSupport, allocate_gpu, pr
 from ez.mcts.cy_mcts import Gumbel_MCTS
 
 # @ray.remote(num_gpus=0.05)
-@ray.remote(num_gpus=0.05)
+@ray.remote(num_cpus=1)
 class DataWorker(Worker):
     def __init__(self, rank, agent, replay_buffer, storage, config):
         super().__init__(rank, agent, replay_buffer, storage, config)
@@ -38,7 +38,7 @@ class DataWorker(Worker):
 
         # create the model for self-play data collection
         self.model = self.agent.build_model()
-        self.model.cuda()
+        self.model.to(self.config.device)
         if int(torch.__version__[0]) == 2:
             self.model = torch.compile(self.model)
         self.model.eval()
@@ -254,12 +254,12 @@ class DataWorker(Worker):
     def put_trajs(self, traj):
         if self.config.priority.use_priority:
             traj_len = len(traj)
-            pred_values = torch.from_numpy(np.array(traj.pred_value_lst)).cuda().float()
+            pred_values = torch.from_numpy(np.array(traj.pred_value_lst)).to(self.config.device).float()
             # search_values = torch.from_numpy(np.array(traj.search_value_lst)).cuda().float()
             if self.config.model.value_target == 'bootstrapped':
-                target_values = torch.from_numpy(np.asarray(traj.get_bootstrapped_value())).cuda().float()
+                target_values = torch.from_numpy(np.asarray(traj.get_bootstrapped_value())).to(self.config.device).float()
             elif self.config.model.value_target == 'GAE':
-                target_values = torch.from_numpy(np.asarray(traj.get_gae_value())).cuda().float()
+                target_values = torch.from_numpy(np.asarray(traj.get_gae_value())).to(self.config.device).float()
             else:
                 raise NotImplementedError
             priorities = L1Loss(reduction='none')(pred_values[:traj_len], target_values[:traj_len]).detach().cpu().numpy() + self.config.priority.min_prior
@@ -278,6 +278,9 @@ def start_data_worker(rank, agent, replay_buffer, storage, config):
     """
     Start a data worker. Call this method remotely.
     """
-    data_worker = DataWorker.remote(rank, agent, replay_buffer, storage, config)
-    data_worker.run.remote()
-    print(f'[Data worker] Start data worker {rank} at process {os.getpid()}.')
+    if config.device == 'cuda':
+        worker = DataWorker.options(num_cpus=1, num_gpus=0.03).remote(rank, agent, replay_buffer, storage, config)
+    else:
+        worker = DataWorker.options(num_cpus=1).remote(rank, agent, replay_buffer, storage, config)
+    print(f'[Data worker] Data worker {rank} has been launched.')
+    return worker

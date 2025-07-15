@@ -136,7 +136,7 @@ class DynamicsNetwork(nn.Module):
                 1,
                 state.shape[2],
                 state.shape[3],
-            )).cuda().float()
+            ), device=state.device).float()
 
             action_place = (
                     action[:, :, None, None] * action_place / self.action_space_size

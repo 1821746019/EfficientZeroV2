@@ -250,13 +250,13 @@ class PyMCTS(MCTS):
                 random_actions = random_distr.sample(torch.Size([n_random]))
                 random_actions = random_actions.permute(1, 0, 2)
 
-                # random_actions = torch.rand(batch_size, n_random, action_dim).float().cuda()
+                # random_actions = torch.rand(batch_size, n_random, action_dim).float().to(policy.device)
                 # random_actions = 2 * random_actions - 1
 
                 # Gaussian noise
                 # random_actions += torch.randn_like(random_actions)
             else:
-                noises = torch.from_numpy(input_noises).float().cuda()
+                noises = torch.from_numpy(input_noises).float().to(policy.device)
                 random_actions += noises
 
         if input_dist is not None:
@@ -274,12 +274,12 @@ class PyMCTS(MCTS):
                     refined_random_actions = refined_random_distr.sample(torch.Size([n_random]))
                     refined_random_actions = refined_random_actions.permute(1, 0, 2)
                 else:
-                    noises = torch.from_numpy(input_noises).float().cuda()
+                    noises = torch.from_numpy(input_noises).float().to(policy.device)
                     refined_random_actions += noises
 
         all_actions = torch.cat((policy_actions, random_actions), dim=1)
         if input_actions is not None:
-            all_actions = torch.from_numpy(input_actions).float().cuda()
+            all_actions = torch.from_numpy(input_actions).float().to(policy.device)
         if input_dist is not None:
             all_actions = torch.cat((all_actions, refined_policy_actions, refined_random_actions), dim=1)
         # all_actions[:, 0, :] = mean     # add mean as one of candidate
@@ -300,9 +300,10 @@ class PyMCTS(MCTS):
         Node.set_static_attributes(self.discount, self.num_actions)  # set static parameters of MCTS
         roots = [Node(prior=1) for _ in range(batch_size)]          # set root nodes for the batch
         # expand the roots and update the statistics
+        device = root_states.device
         for root, state, value, logit in zip(roots, root_states, root_values, root_policy_logits):
-            root_reward_hidden = (torch.zeros(1, self.lstm_hidden_size).cuda().float(),
-                                  torch.zeros(1, self.lstm_hidden_size).cuda().float())
+            root_reward_hidden = (torch.zeros(1, self.lstm_hidden_size, device=device).float(),
+                                  torch.zeros(1, self.lstm_hidden_size, device=device).float())
             if not self.value_prefix:
                 root_reward_hidden = None
 
@@ -375,7 +376,7 @@ class PyMCTS(MCTS):
             current_states = torch.stack(current_states, dim=0)
             reward_hidden = (torch.stack(reward_hidden[0], dim=1),
                              torch.stack(reward_hidden[1], dim=1))
-            last_actions = torch.from_numpy(np.asarray(last_actions)).cuda().long().unsqueeze(1)
+            last_actions = torch.from_numpy(np.asarray(last_actions)).to(current_states.device).long().unsqueeze(1)
             next_states, next_value_prefixes, next_values, next_logits, reward_hidden = self.update_statistics(
                 prediction=True,                                    # use model prediction instead of env simulation
                 model=model,                                        # model
@@ -440,9 +441,10 @@ class PyMCTS(MCTS):
         Node.set_static_attributes(self.discount, self.num_actions)  # set static parameters of MCTS
         roots = [Node(prior=1) for _ in range(batch_size)]          # set root nodes for the batch
         # expand the roots and update the statistics
+        device = root_states.device
         for root, state, value, logit in zip(roots, root_states, root_values, root_policy_logits):
-            root_reward_hidden = (torch.zeros(1, self.lstm_hidden_size).cuda().float(),
-                                  torch.zeros(1, self.lstm_hidden_size).cuda().float())
+            root_reward_hidden = (torch.zeros(1, self.lstm_hidden_size, device=device).float(),
+                                  torch.zeros(1, self.lstm_hidden_size, device=device).float())
             if not self.value_prefix:
                 root_reward_hidden = None
 
@@ -514,7 +516,7 @@ class PyMCTS(MCTS):
             current_states = torch.stack(current_states, dim=0)
             reward_hidden = (torch.stack(reward_hidden[0], dim=1),
                              torch.stack(reward_hidden[1], dim=1))
-            last_actions = torch.from_numpy(np.asarray(last_actions)).cuda().long().unsqueeze(1)
+            last_actions = torch.from_numpy(np.asarray(last_actions)).to(current_states.device).long().unsqueeze(1)
             next_states, next_value_prefixes, next_values, next_logits, reward_hidden = self.update_statistics(
                 prediction=True,                                    # use model prediction instead of env simulation
                 model=model,                                        # model

@@ -18,7 +18,7 @@ from ez import mcts
 from ez.eval import eval
 
 # @ray.remote(num_gpus=0.05)
-@ray.remote(num_gpus=0.05)
+@ray.remote(num_cpus=1)
 class EvalWorker(Worker):
     def __init__(self, agent, replay_buffer, storage, config):
         super().__init__(0, agent, replay_buffer, storage, config)
@@ -70,6 +70,9 @@ class EvalWorker(Worker):
 # eval worker
 # ======================================================================================================================
 def start_eval_worker(agent, replay_buffer, storage, config):
-    # start data worker
-    eval_worker = EvalWorker.remote(agent, replay_buffer, storage, config)
-    eval_worker.run.remote()
+    if config.device == 'cuda':
+        worker = EvalWorker.options(num_cpus=1, num_gpus=0.1).remote(agent, replay_buffer, storage, config)
+    else:
+        worker = EvalWorker.options(num_cpus=1).remote(agent, replay_buffer, storage, config)
+    print(f'[Eval worker] Eval worker has been launched.')
+    return worker

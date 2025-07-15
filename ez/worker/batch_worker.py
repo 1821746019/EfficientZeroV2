@@ -24,7 +24,7 @@ from ez.utils.format import formalize_obs_lst, DiscreteSupport, LinearSchedule, 
 from ez.data.trajectory import GameTrajectory
 from ez.mcts.cy_mcts import Gumbel_MCTS
 
-@ray.remote(num_gpus=0.03)
+@ray.remote
 # @ray.remote(num_gpus=0.14)
 class BatchWorker(Worker):
     def __init__(self, rank, agent, replay_buffer, storage, batch_storage, config):
@@ -94,8 +94,8 @@ class BatchWorker(Worker):
             weights = torch.load(self.config.eval.model_path)
             self.model.load_state_dict(weights)
             print('analysis begin')
-        self.model.cuda()
-        self.latest_model.cuda()
+        self.model.to(self.config.device)
+        self.latest_model.to(self.config.device)
         if int(torch.__version__[0]) == 2:
             self.model = torch.compile(self.model)
             self.latest_model = torch.compile(self.latest_model)
@@ -881,8 +881,8 @@ class BatchWorker(Worker):
         states = torch.cat([states for _ in range(times)], dim=0)
         values = np.concatenate([values for _ in range(times)], axis=0)
         policies = torch.cat([policies for _ in range(times)], dim=0)
-        reward_hidden = (torch.zeros(1, len(states), self.config.model.lstm_hidden_size).cuda(),
-                         torch.zeros(1, len(states), self.config.model.lstm_hidden_size).cuda())
+        reward_hidden = (torch.zeros(1, len(states), self.config.model.lstm_hidden_size).to(self.config.device),
+                         torch.zeros(1, len(states), self.config.model.lstm_hidden_size).to(self.config.device))
         last_values_prefixes = np.zeros(len(states))
         reward_lst = []
         value_lst = []
@@ -913,7 +913,7 @@ class BatchWorker(Worker):
 
 
             if policy == 'search':
-                actions = torch.from_numpy(np.asarray(best_actions)).cuda().float()
+                actions = torch.from_numpy(np.asarray(best_actions)).to(self.config.device).float()
             else:
                 if self.env == 'Atari':
                     actions = F.gumbel_softmax(policies, hard=True, dim=-1, tau=1e-4)
@@ -928,8 +928,8 @@ class BatchWorker(Worker):
                 values = values.squeeze().detach().cpu().numpy()
                 value_lst.append(values)
             if self.value_prefix and (i + 1) % self.lstm_horizon_len == 0:
-                reward_hidden = (torch.zeros(1, len(states), self.config.model.lstm_hidden_size).cuda(),
-                                 torch.zeros(1, len(states), self.config.model.lstm_hidden_size).cuda())
+                reward_hidden = (torch.zeros(1, len(states), self.config.model.lstm_hidden_size).to(self.config.device),
+                                 torch.zeros(1, len(states), self.config.model.lstm_hidden_size).to(self.config.device))
                 true_rewards = value_prefixes.squeeze().detach().cpu().numpy()
                 # last_values_prefixes = np.zeros(len(states))
             else:
@@ -981,7 +981,7 @@ class BatchWorker(Worker):
                 beg_index = mini_batch * i
                 end_index = mini_batch * (i + 1)
                 current_obs = obs_lst[beg_index:end_index]
-                current_obs = formalize_obs_lst(current_obs, self.image_based)
+                current_obs = formalize_obs_lst(current_obs, self.image_based).to(self.config.device)
                 # obtain the statistics at current steps
                 with autocast():
                     states, values, policies = self.model.initial_inference(current_obs)
@@ -1005,12 +1005,12 @@ class BatchWorker(Worker):
 # batch worker
 # ======================================================================================================================
 def start_batch_worker(rank, agent, replay_buffer, storage, batch_storage, config):
-    """
-    Start a GPU batch worker. Call this method remotely.
-    """
-    worker = BatchWorker.remote(rank, agent, replay_buffer, storage, batch_storage, config)
-    print(f"[Batch worker GPU] Starting batch worker GPU {rank} at process {os.getpid()}.")
-    worker.run.remote()
+    if config.device == 'cuda':
+        worker = BatchWorker.options(num_cpus=1, num_gpus=0.05).remote(rank, agent, replay_buffer, storage, batch_storage, config)
+    else:
+        worker = BatchWorker.options(num_cpus=1,num_gpus=0).remote(rank, agent, replay_buffer, storage, batch_storage, config)
+    print(f'[Batch worker] Starting batch worker {rank} at process {os.getpid()}.')
+    return worker
 
 def start_batch_worker_cpu(rank, agent, replay_buffer, storage, prebatch_storage, config):
     worker = BatchWorker_CPU.remote(rank, agent, replay_buffer, storage, prebatch_storage, config)

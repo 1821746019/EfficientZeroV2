@@ -75,7 +75,7 @@ def start_workers(agent, manager, config):
 
 def join_workers(worker_lst, server_lst):
     data_workers, batch_workers, eval_worker = worker_lst
-    storage_server, replay_buffer_server, watchdog_server, smos_server = server_lst
+    storage_server, replay_buffer_server, watchdog_server, batch_storage = server_lst
 
     # wait for all workers to finish
     for data_worker in data_workers:
@@ -89,6 +89,6 @@ def join_workers(worker_lst, server_lst):
     storage_server.terminate()
     replay_buffer_server.terminate()
     watchdog_server.terminate()
-    smos_server.stop()
+    batch_storage.stop()
     print(f'[main process] All servers have stopped.')
 

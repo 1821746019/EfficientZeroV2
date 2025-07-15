@@ -42,7 +42,7 @@ class Worker:
             # update model
             weights = ray.get(self.storage.get_weights.remote(model_name))
             self.model.set_weights(weights)
-            self.model.cuda()
+            self.model.to(self.config.device)
             self.model.eval()
             if self.config.ray.single_process:
                 print('[Update {}] get recent model at step {}'.format(model_name, trained_steps))
@@ -53,7 +53,7 @@ class Worker:
             self.last_latest_model_index = new_model_index
             weights = ray.get(self.storage.get_weights.remote(model_name))
             self.latest_model.set_weights(weights)
-            self.latest_model.cuda()
+            self.latest_model.to(self.config.device)
             self.latest_model.eval()
 
     def resume_model(self):

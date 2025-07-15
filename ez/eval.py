@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 
 from pathlib import Path
 from tqdm.auto import tqdm
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from torch.cuda.amp import autocast as autocast
 import torch.nn.functional as F
 from ez import mcts
@@ -39,7 +39,9 @@ def main(config):
     # update config
     agent = agents.names[config.agent_name](config)
 
-    num_gpus = torch.cuda.device_count()
+    with open_dict(config):
+        config.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    num_gpus = torch.cuda.device_count() if config.device == 'cuda' else 0
     num_cpus = multiprocessing.cpu_count()
     ray.init(num_gpus=num_gpus, num_cpus=num_cpus,
              object_store_memory= 150 * 1024 * 1024 * 1024 if config.env.image_based else 100 * 1024 * 1024 * 1024)
@@ -47,7 +49,7 @@ def main(config):
     # prepare model
     model = agent.build_model()
     if os.path.exists(config.eval.model_path):
-        weights = torch.load(config.eval.model_path)
+        weights = torch.load(config.eval.model_path, map_location=config.device)
         model.load_state_dict(weights)
         print('resume model from: ', config.eval.model_path)
     if int(torch.__version__[0]) == 2:
@@ -62,7 +64,7 @@ def main(config):
 
 @torch.no_grad()
 def eval(agent, model, n_episodes, save_path, config, max_steps=None, use_pb=False, verbose=0):
-    model.cuda()
+    model.to(config.device)
     model.eval()
 
     # prepare logs
@@ -104,7 +106,7 @@ def eval(agent, model, n_episodes, save_path, config, max_steps=None, use_pb=Fal
         # obtain the statistics at current steps
         with torch.no_grad():
             with autocast():
-                states, values, policies = model.initial_inference(current_stacked_obs)
+                states, values, policies = model.initial_inference(current_stacked_obs.to(config.device))
 
         values = values.detach().cpu().numpy().flatten()
 

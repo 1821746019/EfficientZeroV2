@@ -19,15 +19,16 @@ dependencies = [
   "imageio[ffmpeg,pyav]>=2.20.0",
   "tqdm>=4.64.0",
   "cython",
-  "ray",
+  "ray<2",
+  "pydantic<2",#ray<2 requires pydantic<2
   "torchrl",
   "kornia",
   "dmc2gym @ git+https://github.com/denisyarats/dmc2gym.git",
   "colorednoise"
 ]
 [project.optional-dependencies]
-cpu = ["torch>=2.6.0"]
-gpu = ["torch>=2.6.0"]
+cpu = ["torch>=2"]
+gpu = ["torch>=2"]
 
 [tool.uv]
 # 自定义缓存键，覆盖默认行为。这几个同时改变时，才会重新构建
