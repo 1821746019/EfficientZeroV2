@@ -11,19 +11,19 @@ dependencies = [
   "dm_control>=1.0.9",
   # "gymnasium[atari]>=0.29.0",
   # "ale-py",
-  "gym[atari,accept-rom-license]",
-  "numpy<2",
+  "gym[atari,accept-rom-license]==0.22.0",
   "hydra-core>=1.3.0",
   "wandb>=0.15.0",
   "opencv-python>=4.5.0",
   "imageio[ffmpeg,pyav]>=2.20.0",
   "tqdm>=4.64.0",
   "cython",
-  "ray<2",
+  "ray",
   "pydantic<2",#ray<2 requires pydantic<2
   "torchrl",
   "kornia",
   "dmc2gym @ git+https://github.com/denisyarats/dmc2gym.git",
+  "numpy<2",
   "colorednoise"
 ]
 [project.optional-dependencies]
