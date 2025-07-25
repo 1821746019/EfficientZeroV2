@@ -680,7 +680,7 @@ class Agent:
             return False
 
 
-@ray.remote(num_gpus=0.55)
+@ray.remote
 def train_ddp(agent, rank, replay_buffer, storage, batch_storage, logger):
     print(f'training_rank={rank}')
     if rank == 0:

@@ -1010,6 +1010,8 @@ def start_batch_worker(rank, agent, replay_buffer, storage, batch_storage, confi
     else:
         worker = BatchWorker.options(num_cpus=1,num_gpus=0).remote(rank, agent, replay_buffer, storage, batch_storage, config)
     print(f'[Batch worker] Starting batch worker {rank} at process {os.getpid()}.')
+    # start the worker main loop
+    worker.run.remote()
     return worker
 
 def start_batch_worker_cpu(rank, agent, replay_buffer, storage, prebatch_storage, config):

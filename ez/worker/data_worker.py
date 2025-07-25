@@ -283,4 +283,6 @@ def start_data_worker(rank, agent, replay_buffer, storage, config):
     else:
         worker = DataWorker.options(num_cpus=1).remote(rank, agent, replay_buffer, storage, config)
     print(f'[Data worker] Data worker {rank} has been launched.')
+    # start the worker main loop
+    worker.run.remote()
     return worker

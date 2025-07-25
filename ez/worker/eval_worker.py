@@ -75,4 +75,5 @@ def start_eval_worker(agent, replay_buffer, storage, config):
     else:
         worker = EvalWorker.options(num_cpus=1).remote(agent, replay_buffer, storage, config)
     print(f'[Eval worker] Eval worker has been launched.')
+    worker.run.remote()
     return worker
